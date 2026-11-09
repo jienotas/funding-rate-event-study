@@ -1,0 +1,9 @@
+﻿metric,value
+raw_rows,4.0
+deduplicated_rows_by_instId_ts,4.0
+instruments,2.0
+fundingRate_nonmissing_share,1.0
+nextFundingRate_nonmissing_share,0.0
+settFundingRate_nonmissing_share,1.0
+fundingRate_target_median_minutes_ahead,281.105926375
+nextFundingRate_target_median_minutes_ahead,761.1059263750001

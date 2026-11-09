@@ -1,0 +1,151 @@
+# -*- coding: utf-8 -*-
+"""Inventory existing local datasets and map them to identification needs."""
+
+from __future__ import annotations
+
+from datetime import datetime, timezone
+from pathlib import Path
+import re
+
+import pandas as pd
+
+
+ROOT = Path(__file__).resolve().parent
+PROJECT = ROOT.parent
+DATA = ROOT / "data"
+OUT = ROOT / "output"
+CHUNK_SIZE = 250_000
+
+SOURCES = [
+    ("01_第一周可行性测试/data/funding.csv", "Binance历史实现资金费率", "timestamp", "symbol,funding_rate", "有结算时间和实现费率；不是历史预测费率"),
+    ("01_第一周可行性测试/data/perp_1m.csv", "永续1分钟价格序列", "timestamp", "timestamp,symbol,price", "仅价格字段；没有1分钟成交额/主动方向"),
+    ("02_第二周机制数据管道/data/spot_BTCUSDT_1m.csv", "BTC现货1分钟价格", "timestamp", "timestamp,symbol,price", "仅价格；不能估计现货订单流或成交额"),
+    ("02_第二周机制数据管道/data/spot_ETHUSDT_1m.csv", "ETH现货1分钟价格", "timestamp", "timestamp,symbol,price", "仅价格；不能估计现货订单流或成交额"),
+    ("02_第二周机制数据管道/data/mark_1m.csv", "永续标记价格1分钟序列", "timestamp", "timestamp,symbol,price", "价格序列"),
+    ("02_第二周机制数据管道/data/index_1m.csv", "指数价格1分钟序列", "timestamp", "timestamp,symbol,price", "价格序列"),
+    ("02_第二周机制数据管道/data/perp_spot_index_basis_1m.csv", "永续-现货-指数基差1分钟面板", "timestamp", "perp_price,spot_price,index_price,mark_price", "可研究基差/价格联动；不是订单流或执行成本"),
+    ("02_第二周机制数据管道/data/okx_funding_rate_archive.csv", "OKX费率接口快照归档", "retrieved_at_utc", "instId,fundingTime,fundingRate,nextFundingRate,settFundingRate,retrieved_at_utc", "仅6条同一结算日归档；nextFundingRate字段虽存在但记录均为空，不能当历史预测费率"),
+    ("02_第二周机制数据管道/data/okx_funding_rate_snapshot.csv", "OKX费率接口快照", "retrieved_at_utc", "instId,fundingTime,fundingRate,nextFundingRate,settFundingRate,retrieved_at_utc", "仅2条同一结算日快照；nextFundingRate字段虽存在但记录均为空，不能当历史预测费率"),
+    ("04_第四周识别升级/data/第四周BTC事件级OI对齐.csv", "BTC事件级OI衍生面板", "event_date", "pre_oi_value,dOI_1h_pct", "事件级汇总/对齐结果，不是完整原始OI时间序列"),
+    ("06_第六周流动性机制/data/binance_futures_5m_liquidity.csv", "永续5分钟OHLCV与交易方向代理", "timestamp", "open,high,low,close,quote_volume,trades,taker_buy_quote", "可测5分钟成交额/方向代理/振幅；不含order book快照"),
+]
+
+
+def profile(path: Path, timestamp_col: str) -> tuple[int, str, str, str, int | None]:
+    header = pd.read_csv(path, nrows=0).columns.tolist()
+    if timestamp_col not in header:
+        return 0, ",".join(header), "", "timestamp_column_missing", None
+    count = 0
+    forecast_nonmissing = 0 if "nextFundingRate" in header else None
+    minimum = None
+    maximum = None
+    usecols = [timestamp_col] + (["nextFundingRate"] if forecast_nonmissing is not None else [])
+    for chunk in pd.read_csv(path, usecols=usecols, chunksize=CHUNK_SIZE):
+        count += len(chunk)
+        if forecast_nonmissing is not None:
+            forecast_nonmissing += int(chunk["nextFundingRate"].notna().sum())
+        raw = chunk[timestamp_col]
+        if pd.api.types.is_numeric_dtype(raw):
+            values = pd.to_datetime(raw, unit="ms", utc=True, errors="coerce").dropna()
+        else:
+            values = pd.to_datetime(raw, utc=True, errors="coerce").dropna()
+        if not values.empty:
+            chunk_min, chunk_max = values.min(), values.max()
+            minimum = chunk_min if minimum is None else min(minimum, chunk_min)
+            maximum = chunk_max if maximum is None else max(maximum, chunk_max)
+    return count, ",".join(header), "" if minimum is None else minimum.isoformat(), "" if maximum is None else maximum.isoformat(), forecast_nonmissing
+
+
+def build_inventory() -> pd.DataFrame:
+    rows = []
+    for relative, role, time_col, expected, interpretation in SOURCES:
+        path = PROJECT / relative
+        if not path.exists():
+            rows.append({"file": relative, "role": role, "exists": False, "rows": 0, "columns": "", "expected_fields_present": False,
+                         "time_min_utc": "", "time_max_utc": "", "next_funding_rate_nonmissing": "NA", "identification_relevance": interpretation})
+            continue
+        rows_count, columns, time_min, time_max, forecast_nonmissing = profile(path, time_col)
+        colset = set(columns.split(","))
+        expected_fields = set(expected.split(","))
+        rows.append({"file": relative, "role": role, "exists": True, "rows": rows_count, "columns": columns,
+                     "expected_fields_present": expected_fields.issubset(colset), "time_min_utc": time_min,
+                     "time_max_utc": time_max, "next_funding_rate_nonmissing": forecast_nonmissing if forecast_nonmissing is not None else "NA",
+                     "identification_relevance": interpretation})
+    return pd.DataFrame(rows)
+
+
+def filename_search() -> list[str]:
+    pattern = re.compile(r"trade|depth|order.?book|aggtrade|成交明细|盘口|逐笔", re.IGNORECASE)
+    return sorted(str(path.relative_to(PROJECT)) for path in PROJECT.rglob("*") if path.is_file() and pattern.search(path.name))
+
+
+def write_report(inventory: pd.DataFrame, matches: list[str]) -> None:
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    spot = inventory.loc[inventory["role"].str.contains("现货1分钟价格")]
+    okx = inventory.loc[inventory["role"].str.startswith("OKX")]
+    liq = inventory.loc[inventory["role"].str.contains("永续5分钟")].iloc[0]
+    funding = inventory.loc[inventory["role"].str.contains("历史实现")].iloc[0]
+    lines = [
+        "## Material Passport", "", "- Origin Skill: experiment-agent", "- Origin Mode: validate / local data audit",
+        f"- Origin Date: {now}", "- Verification Status: ANALYZED", "- Version Label: data_availability_audit_v1", "",
+        "## 第十二周：本地数据可得性与识别闸门", "",
+        "### 结论先行", "",
+        "当前本地数据可支撑事件时点的成交额、交易笔数、主动买入成交额代理和价格振幅描述；不足以支持真实盘口流动性或强因果结论。现有现货1分钟数据只有价格，无法形成现货成交额/主动方向的订单流差分；文件名盘点也没有发现逐笔成交或订单簿深度原始文件。",
+        "",
+        f"- 现货 BTC/ETH 文件字段均为价格序列，记录数：{'; '.join(f'{r.role}={r.rows}' for r in spot.itertuples(index=False))}。",
+        f"- 永续5分钟文件 `{liq['file']}` 有 `{liq['columns']}`；它可用于成交活动代理，但不等于盘口深度或执行成本。",
+        f"- Binance历史费率文件 `{funding['file']}` 记录实现费率；不能把它解释成结算前可交易的预测费率。OKX本地快照/归档共{int(okx['rows'].sum())}行，`nextFundingRate`非空{int(pd.to_numeric(okx['next_funding_rate_nonmissing'], errors='coerce').fillna(0).sum())}行，且只有单一结算日记录。",
+        f"- 项目文件名匹配 trade/depth/orderbook 等词的结果：{'; '.join(matches) if matches else '未发现'}。这是本地文件名扫描，不是对任何外部平台可用性的判断。", "",
+        "### 数据文件清单", "",
+        "| 文件 | 角色 | 行数 | UTC覆盖 | nextFundingRate非空 | 关键字段/边界 |",
+        "|------|------|-----:|----------|---------------------:|----------------|",
+    ]
+    for row in inventory.itertuples(index=False):
+        if row.exists:
+            time_range = f"{row.time_min_utc} 至 {row.time_max_utc}"
+            lines.append(f"| `{row.file}` | {row.role} | {row.rows} | {time_range} | {row.next_funding_rate_nonmissing} | `{row.columns}`；{row.identification_relevance} |")
+        else:
+            lines.append(f"| `{row.file}` | {row.role} | 缺失 | - | - | {row.identification_relevance} |")
+    lines.extend([
+        "", "### 识别需求与现状", "",
+        "| 研究主张 | 最低数据需求 | 当前状态 | 判断 |",
+        "|----------|------------|----------|------|",
+        "| 结算附近成交活动变化 | 事件时点、永续成交额/笔数/方向代理 | 已有5分钟OHLCV | 可做描述性事件时间结果，仍有固定时钟混杂 |",
+        "| 真实流动性恶化 | 报价价差、订单簿深度、冲击成本或可验证执行成本 | 缺订单簿/执行成本原始数据 | 当前不能作此主张 |",
+        "| 永续-现货订单流差分 | 同步现货与永续成交额、主动方向、可靠时间戳 | 现货只有价格 | 当前不能做订单流差分；补到数据后仍需评估溢出 |",
+        "| 结算前费率剂量 | 结算前可观测预测费率历史序列 | 仅见历史实现费率与当前快照审计 | 未验证，不可用实现费率替代 |",
+        "| OI/仓位机制 | 结算前连续OI/持仓，最好细粒度分账户或方向 | 已有事件级OI衍生数据，未发现完整原始OI文件 | 可作有限关联，不能确认拥挤交易者机制 |",
+        "| 因果结算效应 | 同槽位可信未处理变化、不同结算时刻或其他外生识别来源 | 同一交易所固定UTC 00/08/16结算 | 当前识别闸门未通过 |", "",
+        "### 对照组与可识别性", "",
+        "1. Binance BTC/ETH 的 UTC 00/08/16 槽位每天都安排结算；BTC/ETH 或 00/08/16 分层是异质性分层，不是未处理组。",
+        "2. 同一 UTC 小时内的 `:15/:30/:45` 可以描述一般分钟相位，但把它们当作结算时点反事实，需要额外假设“结算小时没有专属的时钟冲击”，该假设当前未验证。",
+        "3. 跨交易所对照只有在结算时间、资产构成、交易制度、同步覆盖足以制造处理差异时才可能有用；若各平台同时结算或存在强跨市场溢出，也不能自动视作控制组。",
+        "4. 现货价差分只能控制部分共同价格冲击。现货自身也可能响应永续交易，且必须补齐同步成交额/方向数据，因此不是天然干净的控制组。",
+        "5. 增加同一固定结算时刻的历史长度会提高描述估计精度，但不会解决完全缺少同槽位反事实的识别问题。", "",
+        "### 阶段闸门", "",
+        "**当前判定：数据可得性通过（用于描述性事件研究）；因果识别未通过；微观结构机制数据未通过。** 在外部数据补齐和对照设计论证之前，论文可暂定为结算时点附近的成交活动及UTC时段异质性研究，不能承诺结算导致价格压力或流动性恶化。", "",
+        "### 可执行的下一步", "",
+        "- 先确认可获得的逐笔成交/订单簿数据范围、频率、历史回溯长度和费用限制；优先拿一个短窗口试下载并核对字段、时区、缺失与配对率。",
+        "- 若转向跨交易所：先做平台结算时刻映射和同一事件覆盖矩阵，再决定事件级面板；不能先回归再寻找合适的对照。",
+        "- 若采用现货永续比较：先补现货OHLCV/成交明细，构建同步成交额与方向指标，并把可能的跨市场溢出写入识别限制。",
+        "- 将“数据获取成功”与“因果识别成立”分成两个闸门；缺少可信反事实时，应保持描述性题目。", "",
+        "### 方法与限制", "",
+        "本审计只读取当前项目中已保存的数据文件和表头，不调用外部网络、不下载新数据。分钟/5分钟数据行数与时间范围由脚本分块扫描；trade/depth 文件检查仅依据当前项目文件名关键词。不存在的字段或文件不被推断为任何平台绝对不可获取。", "",
+        "### Output Files", "", "- `data/第十二周本地数据盘点.csv`", "- `output/第十二周数据与识别审计.md`",
+    ])
+    (OUT / "第十二周数据与识别审计.md").write_text("\n".join(lines), encoding="utf-8")
+
+
+def main() -> None:
+    DATA.mkdir(parents=True, exist_ok=True)
+    OUT.mkdir(parents=True, exist_ok=True)
+    inventory = build_inventory()
+    matches = filename_search()
+    inventory.to_csv(DATA / "第十二周本地数据盘点.csv", index=False, encoding="utf-8-sig")
+    write_report(inventory, matches)
+    print(inventory[["file", "exists", "rows", "time_min_utc", "time_max_utc"]].to_string(index=False))
+    print(f"trade_depth_filename_matches={len(matches)}")
+
+
+if __name__ == "__main__":
+    main()

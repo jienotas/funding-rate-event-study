@@ -1,0 +1,16 @@
+﻿metric,value
+funding_rows,1080
+price_rows,518404
+funding_start_utc,2026-04-09T08:00:00.010000+00:00
+funding_end_utc,2026-10-06T00:00:00.003000+00:00
+price_start_utc,2026-04-09T07:04:00+00:00
+price_end_utc,2026-10-06T07:05:00+00:00
+valid_real_events,1078
+valid_pseudo_events,1080
+valid_near_zero_events,115
+BTCUSDT_interval_median_minutes,480.0
+BTCUSDT_interval_min_minutes,479.9995666666666
+BTCUSDT_interval_max_minutes,480.0002666666667
+ETHUSDT_interval_median_minutes,480.0
+ETHUSDT_interval_min_minutes,479.9995666666666
+ETHUSDT_interval_max_minutes,480.0002666666667

@@ -1,0 +1,3 @@
+"asset","unique_minute_slots","minute_slots_shared_by_all_three_venues","three_way_share_of_minute_slots","max_cross_venue_timestamp_drift_ms_within_minute","exact_millisecond_three_way_matches","venue_count_distribution","first_shared_examples_utc"
+"BTC","100","100","1","9","45","venue_count=3: 100 minute slots","2026-09-04T00:00Z, 2026-09-04T08:00Z, 2026-09-04T16:00Z"
+"ETH","100","100","1","9","45","venue_count=3: 100 minute slots","2026-09-04T00:00Z, 2026-09-04T08:00Z, 2026-09-04T16:00Z"

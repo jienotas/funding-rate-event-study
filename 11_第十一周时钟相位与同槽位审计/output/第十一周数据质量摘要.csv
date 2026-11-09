@@ -1,0 +1,10 @@
+﻿metric,value
+adjacent_5m_jump_pairs,103706
+event_count,1080
+event_anchor_rows,5400
+event_anchor_rows_with_jump,5400
+event_anchor_missing_jump,0
+event_dates,181
+jump_min_utc,2026-04-09T06:00:00+00:00
+jump_max_utc,2026-10-06T07:00:00+00:00
+non_event_minute_phases,12

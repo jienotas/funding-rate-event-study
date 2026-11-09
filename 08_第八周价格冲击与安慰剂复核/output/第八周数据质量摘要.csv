@@ -1,0 +1,16 @@
+﻿metric,value
+real_funding_events,1080
+symbols,"BTCUSDT,ETHUSDT"
+raw_5m_bars,103706
+raw_bar_time_min_utc,2026-04-09T06:00:00+00:00
+raw_bar_time_max_utc,2026-10-06T07:00:00+00:00
+anchor_rows_expected,3240
+anchors_with_both_bars,3240
+anchors_missing_pre_bar,0
+anchors_missing_post_bar,0
+zero_or_missing_pre_quote_volume,0
+zero_or_missing_post_quote_volume,0
+date_clusters,181
+offset_0h_complete_pre_post,1080
+offset_3h_complete_pre_post,1080
+offset_5h_complete_pre_post,1080

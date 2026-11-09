@@ -1,0 +1,3 @@
+"asset","unique_minute_slots","Binance_Bybit_shared_slots","Binance_Bybit_share","Binance_OKX_shared_slots","Bybit_OKX_shared_slots","slots_with_all_three_venues","all_three_window_utc","all_three_share_of_observed_union","max_cross_venue_timestamp_drift_ms"
+"BTC","544","544","1","300","300","300","2026-06-29T08:00Z to 2026-10-07T00:00Z","0.5515","26"
+"ETH","544","544","1","300","300","300","2026-06-29T08:00Z to 2026-10-07T00:00Z","0.5515","26"
